@@ -1,0 +1,8 @@
+{
+  "name": "@wa-gtm/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared Supabase client, types, and constants for WA GTM Project",
+  "main": "index.js",
+  "type": "module"
+}

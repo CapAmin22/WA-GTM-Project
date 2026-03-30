@@ -1,0 +1,20 @@
+{
+  "name": "wa-gtm-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WhatsApp Go-To-Market Engine — Dynamic Account Scaling",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:dashboard": "npm run dev --workspace=apps/dashboard",
+    "dev:worker": "npm run dev --workspace=apps/worker",
+    "build:dashboard": "npm run build --workspace=apps/dashboard",
+    "start:worker": "npm run start --workspace=apps/worker",
+    "lint": "npm run lint --workspace=apps/dashboard"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
