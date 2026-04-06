@@ -1,0 +1,138 @@
+WA GTM Project — Deployment Readiness Plan
+Background
+After a full audit of every source file in the project (35 files across dashboard, worker, shared package, migrations, and config), the core architecture is sound. The codebase is clean, well-structured, and follows good patterns. However, 5 critical bugs and several production-readiness gaps were discovered that must be fixed before deployment.
+
+User Review Required
+CAUTION
+
+Critical: Reconnect Loop Storm — The "Test Account" (+1234567890) is caught in an infinite reconnect loop (Status 440 → reconnect → 440 → reconnect) consuming worker resources. This is because it's a fake number that can't actually authenticate. It eventually gets a 401 (logged out), but not before wasting dozens of reconnect cycles. This account must be removed and the reconnect logic needs exponential backoff.
+
+WARNING
+
+Hydration Mismatch — The dashboard is throwing React hydration errors on AccountCard. Root cause: new Date().toLocaleString() renders differently on server vs client (different timezone/locale). This causes a visual flash and console errors in production.
+
+IMPORTANT
+
+Realtime Subscription Timeout — Worker's Supabase Realtime channel reports TIMED_OUT status, which means dynamic account scaling (add/remove accounts via UI → worker picks them up) is unreliable. The worker needs a heartbeat/reconnect mechanism.
+
+Proposed Changes
+Component 1: Worker — Critical Bug Fixes
+[MODIFY] 
+client-manager.js
+Bug 1 — No Exponential Backoff on Reconnect:
+
+Line 196: Math.pow(2, 0) is always 1, so delay is always 5s. Should track retry count per account.
+Fix: Add a retryCount map and implement real exponential backoff with a max of 5 retries before marking as disconnected.
+Bug 2 — No Realtime Reconnect on Timeout:
+
+The Realtime subscription times out silently. Need to handle TIMED_OUT and CLOSED statuses and resubscribe.
+Bug 3 — No Graceful Handling of Status 440 (Connection Replaced):
+
+Status 440 means "Connection replaced" (another device logged in). Currently treated as reconnectable, which causes a loop. Should mark as disconnected instead.
+Improvements:
+
+Add max retry limit (5 attempts) before giving up
+Track retry counts per account
+Handle status 440 as non-reconnectable
+Add Realtime channel reconnect on timeout
+Clean up auth_info directory on re-pair
+[MODIFY] 
+index.js
+Remove pino-pretty transport dependency (not installed, crashes in production)
+Use plain JSON logging for production (already the default transport)
+Component 2: Dashboard — Hydration & UX Fixes
+[MODIFY] 
+AccountCard.js
+Bug 4 — Hydration Mismatch on Date Rendering:
+
+new Date(account.last_connected_at).toLocaleString() renders differently on server vs client.
+Fix: Wrap in a client-only component that only renders after mount, using suppressHydrationWarning as fallback.
+[MODIFY] 
+LivePairing.js
+Add auto-refresh timer to re-poll QR if Realtime update is delayed (every 5s fallback poll)
+Add visual countdown timer ("QR expires in Xs")
+Add a "Retry" button if worker hasn't generated QR in 15 seconds
+[MODIFY] 
+useRealtimeAccounts.js
+The initialAccounts dependency in the first useEffect will cause infinite renders if the parent re-renders. Fix: use a ref to compare.
+Add Realtime subscription error handling and auto-resubscribe
+[MODIFY] 
+AccountMenu.js
+handleDelete returns new Response(null, { status: 204 }) from the API which causes res.json() to fail (204 has no body). Fix: check status before calling .json().
+Component 3: API Routes — Robustness
+[MODIFY] 
+route.js (accounts)
+The duplicate check in POST uses anon_key via the user's session. Since RLS accounts_select only shows non-archived accounts to authenticated users, this is correct. No changes needed, but add a comment for clarity.
+[MODIFY] 
+route.js (accounts/:id)
+DELETE handler: The is_archived = true soft-delete is correct but the API returns 204 (no body). The client-side handleDelete tries to parse JSON on error. Fix client-side to handle 204 properly.
+[MODIFY] 
+route.js (re-pair)
+The baileys_sessions/keys cleanup uses the user's anon_key session, but these tables have RLS USING(false) for authenticated users. This means the delete calls silently fail. Fix: Use a server-side admin client with the service_role key for session cleanup.
+Component 4: Production Configuration
+[MODIFY] 
+next.config.mjs
+Add output: 'standalone' for Docker-optimized builds
+Add security headers (X-Frame-Options, CSP, etc.)
+Suppress middleware deprecation warning
+[MODIFY] 
+.env (worker)
+Change NODE_ENV=production to NODE_ENV=development for local dev (pino-pretty won't crash)
+[MODIFY] 
+002_rls_policies.sql
+File already updated with public.user_role() fix. No further changes needed.
+Component 5: Data Cleanup
+Remove Test Account
+Delete the fake "Test Account" (+1234567890) that's caught in a reconnect loop
+Delete its auth_info_* directory from disk
+This frees worker resources for the real Passionbits.io account
+Core User Journey — Test Matrix
+Based on the project roadmap, here are all features mapped to test cases:
+
+#	Feature	Journey Step	Test
+1	Auth — Login	User visits /login, enters credentials	Verify redirect to /accounts
+2	Auth — Session	Middleware checks session on every route	Verify /accounts redirects to /login when logged out
+3	Auth — Logout	User clicks "Sign Out" in sidebar	Verify session cleared, redirect to /login
+4	Accounts — Add Number	Admin clicks "Add Number", fills form	Verify account appears in DB with status pairing
+5	Accounts — Live QR	Worker detects new account, generates QR	Verify QR code appears on dashboard within 5s
+6	Accounts — Pair	User scans QR with WhatsApp	Verify status changes to active, connected
+7	Accounts — Edit Limits	Admin clicks ⋮ → Edit Limits	Verify name/limit update persists
+8	Accounts — Re-Pair	Super Admin clicks ⋮ → Re-Pair	Verify QR regenerated, old session cleared
+9	Accounts — Delete	Super Admin clicks ⋮ → Delete	Verify soft-delete (archived), removed from UI
+10	Realtime — Live Updates	Another user adds/edits/deletes	Verify dashboard updates without refresh
+11	RBAC — Role Enforcement	Viewer user tries to add account	Verify "Add Number" button hidden, API rejects
+12	Worker — Reconnect	WhatsApp disconnects temporarily	Verify worker reconnects with backoff
+13	Worker — Dynamic Scaling	New account added from UI	Verify worker picks up and initializes socket
+14	Build — Production	npm run build:dashboard	Verify zero build errors
+Open Questions
+IMPORTANT
+
+Account Switching Feature: You mentioned users can change/switch WhatsApp accounts per their feasibility. Is this just the existing Add/Re-Pair/Delete flow, or do you envision a separate "Switch Active Account" feature where users select which account is currently "primary"?
+
+IMPORTANT
+
+Passionbits.io Pairing: Was the QR code successfully scanned and the account paired to active status? This will impact which tests we can run — if it's still in pairing, we can test the pairing flow live.
+
+Verification Plan
+Automated Tests
+npm run build:dashboard — Zero build errors
+npm run lint — Zero lint errors
+Worker process starts cleanly with no crash loops
+All API routes return correct status codes (tested via browser subagent)
+Manual Verification (via browser subagent)
+Login flow with valid credentials
+Add a new account → verify QR appears
+Edit account limits → verify persistence
+Delete account → verify removal from UI
+Logout → verify redirect to login
+Production Build Verification
+Next.js production build completes
+No hydration warnings in console
+Worker runs stable for 60s+ without reconnect storms
+Agent
+WA-GTM-Project
+please continue the work according to the plan @file: 
+
+
+
+AI may make mistakes. Double-check all generated code.

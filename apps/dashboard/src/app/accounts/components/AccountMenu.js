@@ -49,8 +49,14 @@ export default function AccountMenu({ account, userRole, onEditLimits }) {
         method: 'DELETE',
       });
       if (!res.ok) {
-        const data = await res.json();
-        alert(data.error || 'Failed to delete');
+        let errorMsg = 'Failed to delete';
+        try {
+          const data = await res.json();
+          errorMsg = data.error || errorMsg;
+        } catch (e) {
+            // Ignore JSON parse errors for non-JSON responses
+        }
+        alert(errorMsg);
       }
     } catch (err) {
       alert('Network error: ' + err.message);

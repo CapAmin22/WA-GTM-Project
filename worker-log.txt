@@ -1,0 +1,219 @@
+node : <ref *1> 
+node:child_process:966
+At line:1 char:1
++ node -e "const 
+{execSync} = require('ch
+ild_process'); const r 
+= execS ...
++ ~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo      
+        : NotSpecified  
+  : (<ref *1> node:ch   
+ ild_process:966:Str    
+ing) [], RemoteExce    
+ption
+    + FullyQualifiedErr 
+   orId : NativeComman  
+  dError
+ 
+    throw err;
+    ^
+
+Error: spawnSync C:\WIND
+OWS\system32\cmd.exe 
+ETIMEDOUT
+    at Object.spawnSync 
+(node:internal/child_pro
+cess:1123:20)
+    at spawnSync (node:c
+hild_process:877:24)
+    at execSync (node:ch
+ild_process:958:15)
+    at [eval]:1:56
+    at 
+runScriptInThisContext (
+node:internal/vm:209:10)
+    at node:internal/pro
+cess/execution:118:14
+    at 
+[eval]-wrapper:6:24
+    at runScript (node:i
+nternal/process/executio
+n:101:62)
+    at evalScript (node:
+internal/process/executi
+on:133:3)
+    at node:internal/mai
+n/eval_string:51:3 {
+  errno: -4039,
+  code: 'ETIMEDOUT',
+  syscall: 'spawnSync C:
+\\WINDOWS\\system32\\cmd
+.exe',
+  path: 'C:\\WINDOWS\\sy
+stem32\\cmd.exe',
+  spawnargs: [ '/d', 
+'/s', '/c', '"node 
+src/index.js"' ],
+  error: [Circular *1],
+  status: null,
+  signal: 'SIGTERM',
+  output: [
+    null,
+    '{"level":30,"time":
+1775487981589,"pid":1250
+8,"hostname":"Amin","msg
+":"??? WA GTM Worker 
+starting..."}\n' +
+      '{"level":30,"time
+":1775487981590,"pid":12
+508,"hostname":"Amin","m
+sg":"   Supabase URL: ht
+tps://rdobracgfbuqzboldh
+xj.supabase.co"}\n' +
+      '{"level":30,"time
+":1775487981590,"pid":12
+508,"hostname":"Amin","m
+sg":"   Environment: 
+development"}\n' +
+      '{"level":30,"time
+":1775487981884,"pid":12
+508,"hostname":"Amin","m
+sg":"Found 1 active 
+accounts"}\n' +
+      '{"level":30,"time
+":1775487981884,"pid":12
+508,"hostname":"Amin","m
+sg":"[Passionbits/+91832
+9556730] Initializing 
+WhatsApp socket..."}\n' 
++
+      '{"level":30,"time
+":1775487982148,"pid":12
+508,"hostname":"Amin","m
+sg":"[Passionbits/+91832
+9556730] Socket 
+initialized (total 
+active: 1)"}\n' +
+      '{"level":30,"time
+":1775487982152,"pid":12
+508,"hostname":"Amin","m
+sg":"??? Worker is 
+running and listening 
+for account 
+changes"}\n' +
+      '{"level":30,"time
+":1775487983084,"pid":12
+508,"hostname":"Amin","m
+sg":"[Passionbits/+91832
+9556730] QR code 
+generated, pushing to 
+database"}\n' +
+      '{"level":30,"time
+":1775487992162,"pid":12
+508,"hostname":"Amin","m
+sg":"Realtime 
+subscription status: 
+TIMED_OUT"}\n' +
+      '{"level":40,"time
+":1775487992163,"pid":12
+508,"hostname":"Amin","m
+sg":"Realtime 
+TIMED_OUT. 
+Resubscribing in 
+5s..."}\n' +
+      '{"level":30,"time
+":1775487997174,"pid":12
+508,"hostname":"Amin","m
+sg":"Realtime 
+subscription status: 
+CLOSED"}\n' +
+      '{"level":40,"time
+":1775487997174,"pid":12
+508,"hostname":"Amin","m
+sg":"Realtime channel 
+closed unexpectedly. 
+Resubscribing..."}\n',
+    ''
+  ],
+  pid: 18152,
+  stdout: '{"level":30,"
+time":1775487981589,"pid
+":12508,"hostname":"Amin
+","msg":"??? WA GTM 
+Worker starting..."}\n' 
++
+    '{"level":30,"time":
+1775487981590,"pid":1250
+8,"hostname":"Amin","msg
+":"   Supabase URL: http
+s://rdobracgfbuqzboldhxj
+.supabase.co"}\n' +
+    '{"level":30,"time":
+1775487981590,"pid":1250
+8,"hostname":"Amin","msg
+":"   Environment: 
+development"}\n' +
+    '{"level":30,"time":
+1775487981884,"pid":1250
+8,"hostname":"Amin","msg
+":"Found 1 active 
+accounts"}\n' +
+    '{"level":30,"time":
+1775487981884,"pid":1250
+8,"hostname":"Amin","msg
+":"[Passionbits/+9183295
+56730] Initializing 
+WhatsApp socket..."}\n' 
++
+    '{"level":30,"time":
+1775487982148,"pid":1250
+8,"hostname":"Amin","msg
+":"[Passionbits/+9183295
+56730] Socket 
+initialized (total 
+active: 1)"}\n' +
+    '{"level":30,"time":
+1775487982152,"pid":1250
+8,"hostname":"Amin","msg
+":"??? Worker is 
+running and listening 
+for account 
+changes"}\n' +
+    '{"level":30,"time":
+1775487983084,"pid":1250
+8,"hostname":"Amin","msg
+":"[Passionbits/+9183295
+56730] QR code 
+generated, pushing to 
+database"}\n' +
+    '{"level":30,"time":
+1775487992162,"pid":1250
+8,"hostname":"Amin","msg
+":"Realtime 
+subscription status: 
+TIMED_OUT"}\n' +
+    '{"level":40,"time":
+1775487992163,"pid":1250
+8,"hostname":"Amin","msg
+":"Realtime TIMED_OUT. 
+Resubscribing in 
+5s..."}\n' +
+    '{"level":30,"time":
+1775487997174,"pid":1250
+8,"hostname":"Amin","msg
+":"Realtime 
+subscription status: 
+CLOSED"}\n' +
+    '{"level":40,"time":
+1775487997174,"pid":1250
+8,"hostname":"Amin","msg
+":"Realtime channel 
+closed unexpectedly. 
+Resubscribing..."}\n',
+  stderr: ''
+}
+
+Node.js v20.19.0

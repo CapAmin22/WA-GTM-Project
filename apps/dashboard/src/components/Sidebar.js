@@ -17,12 +17,16 @@ export default function Sidebar({ activePath }) {
   };
 
   const navItems = [
+    { path: '/dashboard', label: 'Dashboard', icon: '🏠' },
     { path: '/accounts', label: 'Accounts', icon: '📱' },
-    // Future pages:
-    // { path: '/campaigns', label: 'Campaigns', icon: '📤' },
-    // { path: '/contacts', label: 'Contacts', icon: '👥' },
-    // { path: '/logs', label: 'Send Logs', icon: '📊' },
-    // { path: '/settings', label: 'Settings', icon: '⚙️' },
+    { path: '/contacts', label: 'Contacts', icon: '👥' },
+    { path: '/segments', label: 'Segments', icon: '🏷️' },
+    { path: '/templates', label: 'Templates', icon: '📝' },
+    { path: '/campaigns', label: 'Campaigns', icon: '📤' },
+    { path: '/experiments', label: 'A/B Labs', icon: '🧪' },
+    { path: '/analytics', label: 'Analytics', icon: '📊' },
+    { path: '/logs', label: 'Activity Log', icon: '📋' },
+    { path: '/settings', label: 'Settings', icon: '⚙️' },
   ];
 
   return (

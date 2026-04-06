@@ -1,0 +1,61 @@
+??? Next.js 16.2.1 (Turbopack)
+- Environments: .env.local
+
+npx : ??? The 
+"middleware" file 
+convention is deprecated. 
+Please use "proxy" 
+instead. Learn more: https
+://nextjs.org/docs/message
+s/middleware-to-proxy
+At line:1 char:1
++ npx next build 2>&1 | 
+Out-File -Encoding ascii 
+"c:\Claude imp\WA GTM  ...
++ ~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (?  
+  ?? The "middle...lewa   
+ re-to-proxy:String) [    
+], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+  Creating an optimized production build ...
+
+> Build error occurred
+Error: Turbopack build 
+failed with 2 errors:
+./apps/dashboard/src/app/e
+xperiments/page.js
+Reading source code for 
+parsing failed
+An unexpected error 
+happened while trying to 
+read the source code to 
+parse: failed to convert 
+rope into string
+
+Caused by:
+- invalid utf-8 sequence 
+of 1 bytes from index 144
+
+
+./apps/dashboard/src/app/l
+ogs/page.js
+Reading source code for 
+parsing failed
+An unexpected error 
+happened while trying to 
+read the source code to 
+parse: failed to convert 
+rope into string
+
+Caused by:
+- invalid utf-8 sequence 
+of 1 bytes from index 148
+
+
+    at ignore-listed 
+frames

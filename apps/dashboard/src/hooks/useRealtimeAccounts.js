@@ -12,9 +12,13 @@ import { createClient } from '@/lib/supabase/client';
 export function useRealtimeAccounts(initialAccounts = []) {
   const [accounts, setAccounts] = useState(initialAccounts);
 
+  // Use a stringified version of initialAccounts to prevent infinite loops if
+  // the parent component passes a new array reference on every render.
+  const initialAccountsStr = JSON.stringify(initialAccounts);
+
   useEffect(() => {
-    setAccounts(initialAccounts);
-  }, [initialAccounts]);
+    setAccounts(JSON.parse(initialAccountsStr));
+  }, [initialAccountsStr]);
 
   useEffect(() => {
     const supabase = createClient();

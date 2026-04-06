@@ -41,12 +41,19 @@ export async function POST(request, { params }) {
     }
 
     // 2. Delete existing Baileys sessions and keys for this account
-    await supabase
+    // We must use the service_role key to bypass RLS for these tables
+    const { createServerSupabaseClient } = await import('@wa-gtm/shared');
+    const adminSupabase = createServerSupabaseClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+
+    await adminSupabase
       .from('baileys_sessions')
       .delete()
       .eq('account_id', id);
 
-    await supabase
+    await adminSupabase
       .from('baileys_keys')
       .delete()
       .eq('account_id', id);

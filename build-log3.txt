@@ -1,0 +1,65 @@
+??? Next.js 16.2.1 (Turbopack)
+- Environments: .env.local
+
+npx : ??? The 
+"middleware" file 
+convention is deprecated. 
+Please use "proxy" 
+instead. Learn more: https
+://nextjs.org/docs/message
+s/middleware-to-proxy
+At line:1 char:1702
++ ... /main>\n    
+</div>\n  );\n}`, 
+'utf8');" ; npx next 
+build 2>&1 | Out-F ...
++                         
+                      
+~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (?  
+  ?? The "middle...lewa   
+ re-to-proxy:String) [    
+], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+  Creating an optimized production build ...
+??? Compiled successfully in 28.2s
+  Running TypeScript ...
+  Finished TypeScript in 1744ms ...
+  Collecting page data using 7 workers ...
+  Generating static pages using 7 workers (0/17) ...
+  Generating static pages using 7 workers (4/17) 
+  Generating static pages using 7 workers (8/17) 
+  Generating static pages using 7 workers (12/17) 
+??? Generating static pages using 7 workers (17/17) in 9.0s
+  Finalizing page optimization ...
+
+Route (app)
+??? ??? /
+??? ??? /_not-found
+??? ?? /accounts
+??? ??? /analytics
+??? ?? /api/v1/accounts
+??? ?? /api/v1/accounts/[id]
+??? ?? /api/v1/accounts/[id]/re-pair
+??? ?? /campaigns
+??? ??? /campaigns/new
+??? ?? /contacts
+??? ?? /dashboard
+??? ??? /experiments
+??? ??? /login
+??? ?? /segments
+??? ?? /settings
+??? ?? /templates
+??? ?? /templates/[id]/edit
+??? ??? /templates/new
+
+
+?? Proxy (Middleware)
+
+???  (Static)   prerendered as static content
+??  (Dynamic)  server-rendered on demand
+

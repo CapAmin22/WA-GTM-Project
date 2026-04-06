@@ -101,7 +101,7 @@ export default function AccountCard({ account, userRole }) {
             <div style={{
               fontSize: '0.75rem',
               color: 'var(--text-muted)',
-            }}>
+            }} suppressHydrationWarning>
               Last connected: {new Date(account.last_connected_at).toLocaleString()}
             </div>
           )}
