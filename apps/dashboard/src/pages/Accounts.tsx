@@ -12,6 +12,7 @@ import { toast } from "sonner";
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<any[]>([]);
+  const [todaySentMap, setTodaySentMap] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
@@ -19,17 +20,28 @@ export default function AccountsPage() {
   const [adding, setAdding] = useState(false);
 
   const fetchAccounts = async () => {
-    const { data, error } = await supabase
-      .from("wa_accounts")
-      .select("*")
-      .eq("is_archived", false)
-      .order("created_at", { ascending: false });
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
 
-    if (error) {
-      toast.error("Failed to load accounts: " + error.message);
+    const [accRes, logsRes] = await Promise.all([
+      supabase.from("wa_accounts").select("*").eq("is_archived", false).order("created_at", { ascending: false }),
+      // Accurate today's count from send_logs (source of truth)
+      supabase.from("send_logs").select("account_id").eq("status", "sent").gte("created_at", todayStart.toISOString()),
+    ]);
+
+    if (accRes.error) {
+      toast.error("Failed to load accounts: " + accRes.error.message);
     } else {
-      setAccounts(data || []);
+      setAccounts(accRes.data || []);
     }
+
+    // Build per-account today count map
+    const countMap: Record<string, number> = {};
+    for (const log of logsRes.data || []) {
+      countMap[log.account_id] = (countMap[log.account_id] || 0) + 1;
+    }
+    setTodaySentMap(countMap);
+
     setLoading(false);
   };
 
@@ -50,12 +62,22 @@ export default function AccountsPage() {
   const handleAddAccount = async () => {
     if (!newName || !newPhone) return;
     setAdding(true);
-    const { error } = await supabase.from("wa_accounts").insert({
-      display_name: newName,
-      phone_number: newPhone,
-      status: "pairing",
-      connection_status: "disconnected",
-    });
+
+    // Normalize phone: strip spaces so "+91 8329556730" and "+918329556730" are the same
+    const normalizedPhone = newPhone.replace(/\s+/g, "");
+
+    // Upsert on phone_number — if account exists (even archived), restore it instead of erroring
+    const { error } = await supabase.from("wa_accounts").upsert(
+      {
+        display_name: newName,
+        phone_number: normalizedPhone,
+        status: "pairing",
+        connection_status: "disconnected",
+        is_archived: false,
+        pairing_qr: null,
+      },
+      { onConflict: "phone_number" }
+    );
     setAdding(false);
     if (error) {
       toast.error("Failed to add account: " + error.message);
@@ -167,23 +189,28 @@ export default function AccountsPage() {
                   </Badge>
                 </div>
 
-                {/* Progress */}
-                <div className="mb-4">
-                  <div className="flex justify-between text-xs mb-1.5">
-                    <span className="text-muted-foreground">Messages Today</span>
-                    <span>{acc.messages_sent_today} / {acc.daily_limit}</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-muted overflow-hidden">
-                    <div
-                      className={cn(
-                        "h-full rounded-full transition-all",
-                        acc.messages_sent_today / acc.daily_limit > 0.9 ? "bg-destructive" :
-                        acc.messages_sent_today / acc.daily_limit > 0.7 ? "bg-warning" : "bg-primary"
-                      )}
-                      style={{ width: `${Math.min((acc.messages_sent_today / acc.daily_limit) * 100, 100)}%` }}
-                    />
-                  </div>
-                </div>
+                {/* Progress — uses send_logs as source of truth for today's sends */}
+                {(() => {
+                  const sentToday = todaySentMap[acc.id] || 0;
+                  const pct = acc.daily_limit > 0 ? Math.min((sentToday / acc.daily_limit) * 100, 100) : 0;
+                  return (
+                    <div className="mb-4">
+                      <div className="flex justify-between text-xs mb-1.5">
+                        <span className="text-muted-foreground">Messages Today</span>
+                        <span>{sentToday} / {acc.daily_limit}</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all",
+                            pct > 90 ? "bg-destructive" : pct > 70 ? "bg-warning" : "bg-primary"
+                          )}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* QR Code Display */}
                 {acc.pairing_qr && (

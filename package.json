@@ -2,6 +2,7 @@
   "name": "wa-gtm-project",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "WhatsApp Go-To-Market Engine — Dynamic Account Scaling",
   "workspaces": [
     "apps/*",

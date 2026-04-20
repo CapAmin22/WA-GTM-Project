@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { CheckCircle, XCircle, Clock, Loader2 } from "lucide-react";
+import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
 export function LiveActivityFeed() {
@@ -85,21 +85,20 @@ export function LiveActivityFeed() {
               key={a.id}
               className="flex items-center gap-3 px-4 py-2.5 hover:bg-accent/30 transition-colors cursor-pointer"
             >
-              {a.status === "sent" && (
-                <CheckCircle className="h-3.5 w-3.5 text-success flex-shrink-0" />
-              )}
-              {a.status === "failed" && (
-                <XCircle className="h-3.5 w-3.5 text-destructive flex-shrink-0" />
-              )}
-              {a.status === "queued" && (
-                <Clock className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-              )}
+              {a.status === "sent"
+                ? <CheckCircle className="h-3.5 w-3.5 text-success flex-shrink-0" />
+                : <XCircle className="h-3.5 w-3.5 text-destructive flex-shrink-0" />
+              }
               <div className="flex-1 min-w-0">
                 <span className="text-xs text-foreground truncate block">
-                  {a.status === "sent" && `Sent to ${a.phone} via ${a.account}`}
-                  {a.status === "failed" && `Failed: ${a.phone} (${a.error || 'Unknown Error'})`}
-                  {a.status === "queued" && `Queued: ${a.phone}`}
+                  {a.status === "sent"
+                    ? `Sent to ${a.phone} via ${a.account}`
+                    : `Failed: ${a.phone} — ${a.error || 'Unknown Error'}`
+                  }
                 </span>
+                {a.template && a.template !== "Manual" && (
+                  <span className="text-[10px] text-muted-foreground truncate block">{a.template}</span>
+                )}
               </div>
               <span className="text-[11px] text-muted-foreground flex-shrink-0">
                 {a.time}

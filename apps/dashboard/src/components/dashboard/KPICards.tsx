@@ -26,62 +26,62 @@ export function KPICards() {
 
   useEffect(() => {
     async function fetchStats() {
-      // Get accounts
-      const { data: accounts } = await supabase.from("wa_accounts").select("status, messages_sent_today, daily_limit").eq("is_archived", false);
-      
-      let _activeAccounts = 0;
-      let _totalAccounts = accounts?.length || 0;
-      let _sentToday = 0;
-      let _dailyLimit = 0;
-
-      if (accounts) {
-        accounts.forEach(acc => {
-          if (acc.status === "active") _activeAccounts++;
-          _sentToday += acc.messages_sent_today;
-          _dailyLimit += acc.daily_limit;
-        });
-      }
-
-      // Get queue
-      const { count: pendingCount } = await supabase.from("message_queue").select("*", { count: "exact", head: true }).eq("status", "pending");
-
-      // Get today's logs for failure/delivery tracking
       const todayStart = new Date();
-      todayStart.setHours(0,0,0,0);
-      
-      const { data: logs } = await supabase.from("send_logs").select("status").gte("created_at", todayStart.toISOString());
-      
+      todayStart.setHours(0, 0, 0, 0);
+
+      // Run all queries in parallel
+      const [accountsRes, pendingRes, logsRes, repliesRes] = await Promise.all([
+        supabase.from("wa_accounts").select("connection_status, daily_limit").eq("is_archived", false),
+        supabase.from("message_queue").select("id", { count: "exact", head: true }).eq("status", "pending"),
+        // Use send_logs as the authoritative source for today's sends — avoids inflated messages_sent_today
+        supabase.from("send_logs").select("status").gte("created_at", todayStart.toISOString()),
+        // Real reply rate from contacts table
+        supabase.from("contacts").select("total_replies"),
+      ]);
+
+      const accounts = accountsRes.data || [];
+      let _activeAccounts = 0;
+      let _dailyLimit = 0;
+      accounts.forEach(acc => {
+        if (acc.connection_status === "connected") _activeAccounts++;
+        _dailyLimit += acc.daily_limit || 0;
+      });
+
+      const logs = logsRes.data || [];
+      let _sentToday = 0;
       let _failedToday = 0;
-      let _deliveredToday = 0; // Assuming 'sent' implies delivery for now, or 'delivered' status if implemented
-      
-      if (logs) {
-        logs.forEach(l => {
-          if (l.status === "failed") _failedToday++;
-          if (l.status === "sent" || l.status === "delivered") _deliveredToday++;
-        });
-      }
+      logs.forEach(l => {
+        if (l.status === "sent" || l.status === "delivered") _sentToday++;
+        if (l.status === "failed") _failedToday++;
+      });
+      const totalAttempted = _sentToday + _failedToday;
+      const _deliveryRate = totalAttempted > 0 ? (_sentToday / totalAttempted) * 100 : 0;
 
-      const totalAttempted = _failedToday + _deliveredToday;
-      const _deliveryRate = totalAttempted > 0 ? (_deliveredToday / totalAttempted) * 100 : 0;
-
-      // Mocking reply rate for now since we don't have incoming webhook handling fully DB backed in this MVP slice
-      const _replyRate = 12.3;
+      // Real reply rate: total replies / total sent (all-time)
+      const totalReplies = (repliesRes.data || []).reduce((sum, c) => sum + (c.total_replies || 0), 0);
+      const { count: totalSentAllTime } = await supabase
+        .from("send_logs")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "sent");
+      const _replyRate = totalSentAllTime && totalSentAllTime > 0
+        ? (totalReplies / totalSentAllTime) * 100
+        : 0;
 
       setStats({
         sentToday: _sentToday,
         dailyLimit: _dailyLimit,
         deliveryRate: _deliveryRate,
         activeAccounts: _activeAccounts,
-        totalAccounts: _totalAccounts,
+        totalAccounts: accounts.length,
         replyRate: _replyRate,
-        queuePending: pendingCount || 0,
+        queuePending: pendingRes.count || 0,
         failedToday: _failedToday
       });
       setLoading(false);
     }
 
     fetchStats();
-    
+
     // Auto-refresh every 30s
     const interval = setInterval(fetchStats, 30000);
     return () => clearInterval(interval);
@@ -109,7 +109,7 @@ export function KPICards() {
     {
       title: "Active Accounts",
       value: `${stats.activeAccounts} / ${stats.totalAccounts}`,
-      subtitle: `${stats.totalAccounts - stats.activeAccounts} not active`,
+      subtitle: `${stats.totalAccounts - stats.activeAccounts} disconnected`,
       icon: Wifi,
       color: "text-warning",
       bgColor: "bg-warning/10",
@@ -117,8 +117,8 @@ export function KPICards() {
     },
     {
       title: "Reply Rate",
-      value: `${stats.replyRate}%`,
-      subtitle: "Last 7 days",
+      value: `${stats.replyRate.toFixed(1)}%`,
+      subtitle: "replies / sent (all-time)",
       icon: MessageSquare,
       color: "text-primary",
       bgColor: "bg-primary/10",

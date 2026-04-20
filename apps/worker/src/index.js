@@ -2,6 +2,10 @@ import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 import { ClientManager } from './lib/client-manager.js';
 import pino from 'pino';
+import { mkdirSync } from 'fs';
+
+// Ensure PM2 log directory exists before anything else
+mkdirSync('./logs', { recursive: true });
 
 // ============================================
 // WA GTM Worker — Entry Point

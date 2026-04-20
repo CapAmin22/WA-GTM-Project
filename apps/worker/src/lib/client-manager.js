@@ -12,33 +12,39 @@ import path from 'path';
 // ============================================
 // Client Manager — Dynamic WhatsApp Account Scaling
 // Production-grade with exponential backoff, max retries,
-// Realtime reconnect, and proper disconnect handling.
+// Realtime reconnect, send_logs writing, and campaign counters.
 // ============================================
 
 /** Maximum reconnect attempts before giving up */
-const MAX_RETRIES = 5;
+const MAX_RETRIES = 8;
 /** Base delay for exponential backoff (ms) */
 const BASE_DELAY_MS = 3000;
 /** Max delay cap (ms) */
 const MAX_DELAY_MS = 60000;
-/** Realtime resubscribe delay (ms) */
-const REALTIME_RECONNECT_DELAY_MS = 5000;
-/** Polling fallback interval (ms) — backup for when Realtime fails */
+/** Realtime resubscribe base delay (ms) — doubles on each failure, capped at 60s */
+const REALTIME_RECONNECT_BASE_MS = 5000;
+/** Polling fallback interval (ms) */
 const POLL_FALLBACK_INTERVAL_MS = 30000;
 /** Interval for checking queued campaign messages (ms) */
-const CAMPAIGN_CHECK_INTERVAL_MS = 10000;
-/** Delay between individual messages in a campaign (ms) to avoid bans */
-const MESSAGE_DELAY_BASE_MS = 5000;
+const CAMPAIGN_CHECK_INTERVAL_MS = 12000;
+/**
+ * Base delay between individual messages (ms).
+ * This is the MINIMUM safe gap. With jitter (0.7x–2.0x) applied on top,
+ * actual delay ranges from ~10s to ~30s per message.
+ * WhatsApp typically bans accounts sending > 1 msg every 8–10s sustained.
+ */
+const MESSAGE_DELAY_BASE_MS = 15000;
+/** Max messages to process per campaign-runner tick */
+const CAMPAIGN_BATCH_SIZE = 5;
 
 /**
  * Status codes that should NOT trigger reconnection.
- * 401 = Logged out
- * 440 = Connection replaced (another device took over)
- * 515 = Restart required (QR expired without scan)
+ * 401 = Logged out (session revoked from phone — must re-pair)
  */
 const NON_RECONNECTABLE_CODES = [
-  DisconnectReason.loggedOut,    // 401
-  440,                           // Connection replaced
+  DisconnectReason.loggedOut, // 401
+  // 440 (Connection replaced) is NOT here — it's transient when the previous
+  // worker process is killed. We reconnect with extra back-off instead.
 ];
 
 export class ClientManager {
@@ -55,8 +61,14 @@ export class ClientManager {
     this.retryCounts = new Map();
     /** @type {import('@supabase/supabase-js').RealtimeChannel | null} */
     this.channel = null;
+    /** Monotonic counter — incremented each time we (re)subscribe; lets stale callbacks self-abort */
+    this._realtimeGen = 0;
+    /** Current backoff delay for Realtime reconnects (ms) */
+    this._realtimeBackoffMs = REALTIME_RECONNECT_BASE_MS;
     /** @type {NodeJS.Timeout | null} */
     this.pollTimer = null;
+    /** @type {NodeJS.Timeout | null} */
+    this.campaignTimer = null;
     /** @type {boolean} Whether the manager is running */
     this.isRunning = false;
     /** @type {object} System configuration fetched from DB */
@@ -108,7 +120,32 @@ export class ClientManager {
     // 4. Start polling fallback (backup)
     this._startPolling();
 
-    // 5. Start campaign runner
+    // 5. Reset any orphaned 'processing' messages left over from a previous crashed worker
+    //    They would never be retried otherwise.
+    const { count: resetCount } = await this.supabase
+      .from('message_queue')
+      .update({ status: 'pending' })
+      .eq('status', 'processing')
+      .select('id', { count: 'exact' });
+    if (resetCount > 0) {
+      this.logger.warn(`Reset ${resetCount} orphaned 'processing' message(s) → 'pending'`);
+    }
+
+    // 5b. Daily counter reset — if an account's last_message_at was before today (midnight),
+    //     reset messages_sent_today to 0 so the daily limit applies fresh each day.
+    const todayMidnight = new Date();
+    todayMidnight.setHours(0, 0, 0, 0);
+    const { count: dailyResetCount } = await this.supabase
+      .from('wa_accounts')
+      .update({ messages_sent_today: 0 })
+      .lt('last_message_at', todayMidnight.toISOString())
+      .gt('messages_sent_today', 0)
+      .select('id', { count: 'exact' });
+    if (dailyResetCount > 0) {
+      this.logger.info(`Daily reset: cleared messages_sent_today on ${dailyResetCount} account(s)`);
+    }
+
+    // 6. Start campaign runner
     this._startCampaignRunner();
   }
 
@@ -125,8 +162,10 @@ export class ClientManager {
       this.channel = null;
     }
 
+    const gen = ++this._realtimeGen;
+
     this.channel = this.supabase
-      .channel('wa_accounts_manager')
+      .channel(`wa_accounts_manager_${gen}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'wa_accounts' },
@@ -138,16 +177,20 @@ export class ClientManager {
         (payload) => this.handleAccountUpdate(payload)
       )
       .subscribe((status, err) => {
-        this.logger.info(`Realtime subscription status: ${status}`);
+        // Ignore callbacks from stale/replaced subscriptions
+        if (gen !== this._realtimeGen) return;
 
-        if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
-          this.logger.warn(`Realtime ${status}. Resubscribing in ${REALTIME_RECONNECT_DELAY_MS / 1000}s...`);
-          setTimeout(() => this._subscribeRealtime(), REALTIME_RECONNECT_DELAY_MS);
+        if (status === 'SUBSCRIBED') {
+          this.logger.info('Realtime subscription active');
+          this._realtimeBackoffMs = REALTIME_RECONNECT_BASE_MS; // reset backoff on success
+          return;
         }
 
-        if (status === 'CLOSED' && this.isRunning) {
-          this.logger.warn('Realtime channel closed unexpectedly. Resubscribing...');
-          setTimeout(() => this._subscribeRealtime(), REALTIME_RECONNECT_DELAY_MS);
+        if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR' || (status === 'CLOSED' && this.isRunning)) {
+          const delay = this._realtimeBackoffMs;
+          this._realtimeBackoffMs = Math.min(this._realtimeBackoffMs * 2, 60000);
+          this.logger.warn(`Realtime ${status}. Polling covers sends. Resubscribing in ${delay / 1000}s...`);
+          setTimeout(() => this._subscribeRealtime(), delay);
         }
 
         if (err) {
@@ -177,8 +220,8 @@ export class ClientManager {
 
     // Stop campaign runner
     if (this.campaignTimer) {
-        clearInterval(this.campaignTimer);
-        this.campaignTimer = null;
+      clearInterval(this.campaignTimer);
+      this.campaignTimer = null;
     }
 
     // Terminate all sockets
@@ -251,7 +294,7 @@ export class ClientManager {
           this.logger.info(`${tag} QR code generated, pushing to database`);
           await this.supabase
             .from('wa_accounts')
-            .update({ pairing_qr: qr })
+            .update({ pairing_qr: qr, status: 'pairing' })
             .eq('id', accountId);
         }
 
@@ -289,7 +332,6 @@ export class ClientManager {
           this.sockets.delete(accountId);
 
           if (shouldReconnect) {
-            // Exponential backoff: 3s, 6s, 12s, 24s, 48s (capped at 60s)
             const retryCount = currentRetries + 1;
             this.retryCounts.set(accountId, retryCount);
             const delay = Math.min(BASE_DELAY_MS * Math.pow(2, retryCount - 1), MAX_DELAY_MS);
@@ -298,7 +340,7 @@ export class ClientManager {
 
             await this.supabase
               .from('wa_accounts')
-              .update({ connection_status: 'connecting' })
+              .update({ connection_status: 'reconnecting' })
               .eq('id', accountId);
 
             setTimeout(async () => {
@@ -324,11 +366,13 @@ export class ClientManager {
             this.logger.warn(`${tag} ${reason}. Not reconnecting.`);
 
             this.retryCounts.delete(accountId);
+            // Remove from active socket map so campaign runner doesn't try to use it
+            this.sockets.delete(accountId);
 
             await this.supabase
               .from('wa_accounts')
               .update({
-                status: statusCode === DisconnectReason.loggedOut ? 'disconnected' : 'disconnected',
+                status: 'disconnected',
                 connection_status: 'disconnected',
                 pairing_qr: null,
               })
@@ -340,14 +384,44 @@ export class ClientManager {
       // ---- Save Credentials on Update ----
       sock.ev.on('creds.update', saveCreds);
 
-      // ---- Message Handler ----
+      // ---- Incoming Message Handler ----
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type === 'notify') {
           for (const msg of messages) {
-            if (!msg.key.fromMe) {
-              this.logger.debug(
-                `${tag} Received message from ${msg.key.remoteJid}`
-              );
+            if (!msg.key.fromMe && msg.key.remoteJid) {
+              const senderPhone = msg.key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
+              this.logger.debug(`${tag} Received message from ${senderPhone}`);
+
+              // Increment reply counter on the contact record
+              try {
+                await this.supabase
+                  .from('contacts')
+                  .update({
+                    total_replies: this.supabase.rpc ? undefined : 0, // handled below
+                  })
+                  .eq('phone', senderPhone);
+
+                // Use raw increment via RPC-style update
+                const { error: rpcErr } = await this.supabase.rpc('increment_contact_reply', { p_phone: senderPhone });
+                if (rpcErr) {
+                  // Fallback: direct update if RPC not available
+                  this.supabase
+                    .from('contacts')
+                    .select('total_replies')
+                    .eq('phone', senderPhone)
+                    .single()
+                    .then(({ data }) => {
+                      if (data) {
+                        this.supabase
+                          .from('contacts')
+                          .update({ total_replies: (data.total_replies || 0) + 1 })
+                          .eq('phone', senderPhone);
+                      }
+                    });
+                }
+              } catch {
+                // Non-fatal: reply tracking failure doesn't stop the worker
+              }
             }
           }
         }
@@ -413,24 +487,59 @@ export class ClientManager {
 
   /**
    * Start the campaign message dispatcher.
-   * Periodically checks for queued messages in `campaign_messages` and sends
-   * them through the appropriate connected Baileys socket.
+   * Polls message_queue every 10s for pending messages and sends them
+   * through the appropriate connected Baileys socket.
    */
   _startCampaignRunner() {
     if (!this.isRunning) return;
 
     this.campaignTimer = setInterval(async () => {
+      // Check master kill switch
+      if (this.systemConfig.global_send_enabled === false) {
+        this.logger.debug('Campaign runner: global_send_enabled=false, skipping tick');
+        return;
+      }
+
       try {
-        // Fetch queued messages
+        // Fetch pending messages that have an assigned account
+        // Only pick up messages whose assigned account has an active socket
+        const activeAccountIds = Array.from(this.sockets.keys());
+        if (activeAccountIds.length === 0) {
+          this.logger.debug('Campaign runner: no active sockets, skipping tick');
+          return;
+        }
+
+        // Auto-assign any unassigned pending messages to available accounts (round-robin)
+        const { data: unassigned } = await this.supabase
+          .from('message_queue')
+          .select('id')
+          .eq('status', 'pending')
+          .is('assigned_account_id', null)
+          .lte('scheduled_for', new Date().toISOString())
+          .limit(50);
+        if (unassigned && unassigned.length > 0) {
+          for (let i = 0; i < unassigned.length; i++) {
+            const assignedId = activeAccountIds[i % activeAccountIds.length];
+            await this.supabase
+              .from('message_queue')
+              .update({ assigned_account_id: assignedId })
+              .eq('id', unassigned[i].id)
+              .is('assigned_account_id', null); // guard against race
+          }
+          this.logger.info(`Campaign runner: Auto-assigned ${unassigned.length} unassigned message(s)`);
+        }
+
         const { data: messages, error } = await this.supabase
-          .from('campaign_messages')
-          .select('*, wa_accounts!inner(id, phone_number, display_name)')
-          .eq('status', 'queued')
+          .from('message_queue')
+          .select('*')
+          .eq('status', 'pending')
+          .in('assigned_account_id', activeAccountIds)
+          .lte('scheduled_for', new Date().toISOString())
           .order('created_at', { ascending: true })
-          .limit(10);
+          .limit(CAMPAIGN_BATCH_SIZE);
 
         if (error) {
-          this.logger.debug({ error: error.message }, 'Campaign runner: no messages or table not ready');
+          this.logger.debug({ error: error.message }, 'Campaign runner: query error');
           return;
         }
 
@@ -439,64 +548,194 @@ export class ClientManager {
         this.logger.info(`Campaign runner: Processing ${messages.length} queued message(s)`);
 
         for (const msg of messages) {
-          const accountId = msg.account_id;
+          if (!this.isRunning) break;
+
+          const accountId = msg.assigned_account_id;
           const socketEntry = this.sockets.get(accountId);
 
           if (!socketEntry) {
-            this.logger.warn(`Campaign runner: No active socket for account ${accountId}, skipping`);
-            // Mark as failed — no socket available
-            await this.supabase
-              .from('campaign_messages')
-              .update({ status: 'failed', error_message: 'No active WhatsApp socket' })
-              .eq('id', msg.id);
+            this.logger.warn(`Campaign runner: No active/healthy socket for account ${accountId}, skipping msg ${msg.id}`);
             continue;
           }
 
+          // Claim the message with optimistic lock — VERIFY the claim succeeded
+          const { data: lockData } = await this.supabase
+            .from('message_queue')
+            .update({ status: 'processing' })
+            .eq('id', msg.id)
+            .eq('status', 'pending')
+            .select('id');
+
+          if (!lockData || lockData.length === 0) {
+            this.logger.debug(`Campaign runner: Message ${msg.id} already claimed by another process, skipping`);
+            continue;
+          }
+
+          // Transition campaign from 'scheduled' → 'active' on first message pickup
+          if (msg.campaign_id) {
+            await this.supabase
+              .from('campaigns')
+              .update({ status: 'active' })
+              .eq('id', msg.campaign_id)
+              .eq('status', 'scheduled');
+          }
+
+          const sendStart = Date.now();
+
           try {
-            // Format the JID (add @s.whatsapp.net if not present)
+            // Format the JID
             const jid = msg.recipient_phone.includes('@')
               ? msg.recipient_phone
               : `${msg.recipient_phone.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
 
-            // Parse Spintax before sending
-            const finalMessageBody = this._parseSpintax(msg.message_body);
-            
-            // Send the message
-            await socketEntry.sock.sendMessage(jid, { text: finalMessageBody });
+            // Resolve the final message body:
+            // 1. Use message_body if already resolved (e.g., from direct API)
+            // 2. Otherwise parse Spintax from message_template
+            const rawBody = msg.message_body || msg.message_template || '';
+            const finalBody = this._parseSpintax(rawBody);
 
-            // Mark as sent
+            if (!finalBody) {
+              throw new Error('Empty message body after Spintax resolution');
+            }
+
+            // Simulate composing presence (anti-ban: "typing..." indicator)
+            const composingMin = this.systemConfig.presence_composing_min_sec || 4;
+            const composingMax = this.systemConfig.presence_composing_max_sec || 9;
+            const composingDuration = (composingMin + Math.random() * (composingMax - composingMin)) * 1000;
+
+            try {
+              await socketEntry.sock.sendPresenceUpdate('composing', jid);
+              await new Promise((r) => setTimeout(r, composingDuration));
+              await socketEntry.sock.sendPresenceUpdate('paused', jid);
+            } catch {
+              // Presence simulation is non-fatal
+            }
+
+            // Send the message
+            await socketEntry.sock.sendMessage(jid, { text: finalBody });
+
+            const latencyMs = Date.now() - sendStart;
+
+            // Mark queue item as sent
             await this.supabase
-              .from('campaign_messages')
+              .from('message_queue')
               .update({
                 status: 'sent',
                 sent_at: new Date().toISOString(),
+                attempt_count: (msg.attempt_count || 0) + 1,
               })
               .eq('id', msg.id);
 
-            // Update daily counter
-            await this.supabase.rpc('increment_messages_sent_today', {
-              p_account_id: accountId,
+            // Write send_log
+            await this.supabase.from('send_logs').insert({
+              queue_item_id: msg.id,
+              account_id: accountId,
+              campaign_id: msg.campaign_id || null,
+              variant_id: msg.variant_id || null,
+              status: 'sent',
+              latency_ms: latencyMs,
             });
 
-            this.logger.info(`Campaign runner: Sent message ${msg.id} via account ${accountId}`);
+            // Increment daily counter on account
+            await this.supabase.rpc('increment_messages_sent_today', { p_account_id: accountId });
 
-            // Calculate delay based on system_config
-            const baseDelay = MESSAGE_DELAY_BASE_MS;
-            const jitterMin = this.systemConfig.jitter_min || 0.8;
-            const jitterMax = this.systemConfig.jitter_max || 1.2;
-            const delay = baseDelay * (Math.random() * (jitterMax - jitterMin) + jitterMin);
+            // Increment campaign sent counter + check for completion
+            if (msg.campaign_id) {
+              const { error: rpcErr } = await this.supabase.rpc('increment_campaign_sent', { p_campaign_id: msg.campaign_id });
+              if (rpcErr) this.logger.error({ err: rpcErr }, 'Failed to increment campaign sent counter');
+              // Check if campaign is now complete (no more pending/processing items)
+              const { count: remainingCount } = await this.supabase
+                .from('message_queue')
+                .select('id', { count: 'exact', head: true })
+                .eq('campaign_id', msg.campaign_id)
+                .in('status', ['pending', 'processing']);
+              if (remainingCount === 0) {
+                await this.supabase
+                  .from('campaigns')
+                  .update({ status: 'completed' })
+                  .eq('id', msg.campaign_id)
+                  .in('status', ['active', 'scheduled']);
+                this.logger.info(`Campaign runner: Campaign ${msg.campaign_id} marked completed`);
+              }
+            }
 
-            // Rate-limit: wait between messages to avoid bans
-            await new Promise((r) => setTimeout(r, delay));
+            this.logger.info(`Campaign runner: ✅ Sent msg ${msg.id} via account ${accountId} (${latencyMs}ms)`);
+
+            // Rate-limit jitter delay between messages
+            const jitterMin = this.systemConfig.jitter_min || 0.7;
+            const jitterMax = this.systemConfig.jitter_max || 2.0;
+            const delay = MESSAGE_DELAY_BASE_MS * (Math.random() * (jitterMax - jitterMin) + jitterMin);
+
+            // Randomly go "offline" after some messages to simulate human breaks (anti-ban)
+            if (Math.random() < 0.15) {
+              const offlineBreak = 30000 + Math.random() * 60000; // 30–90 second break
+              this.logger.info(`Campaign runner: Taking a random ${(offlineBreak / 1000).toFixed(0)}s break (human simulation)`);
+              try { await socketEntry.sock.sendPresenceUpdate('unavailable'); } catch {}
+              await new Promise((r) => setTimeout(r, offlineBreak));
+              try { await socketEntry.sock.sendPresenceUpdate('available'); } catch {}
+            } else {
+              await new Promise((r) => setTimeout(r, delay));
+            }
+
           } catch (sendErr) {
-            this.logger.error({ err: sendErr }, `Campaign runner: Failed to send message ${msg.id}`);
+            const latencyMs = Date.now() - sendStart;
+            const newAttemptCount = (msg.attempt_count || 0) + 1;
+            const maxAttempts = msg.max_attempts || 3;
+            const exhausted = newAttemptCount >= maxAttempts;
+
+            this.logger.error(
+              { err: sendErr, msgId: msg.id, attempt: newAttemptCount },
+              `Campaign runner: ❌ Failed to send message`
+            );
+
+            // Update queue item
             await this.supabase
-              .from('campaign_messages')
+              .from('message_queue')
               .update({
-                status: 'failed',
+                status: exhausted ? 'failed' : 'pending',
+                attempt_count: newAttemptCount,
                 error_message: sendErr.message || 'Send failed',
               })
               .eq('id', msg.id);
+
+            // Write failure log
+            await this.supabase.from('send_logs').insert({
+              queue_item_id: msg.id,
+              account_id: accountId,
+              campaign_id: msg.campaign_id || null,
+              variant_id: msg.variant_id || null,
+              status: 'failed',
+              error_message: sendErr.message || 'Send failed',
+              latency_ms: latencyMs,
+            });
+
+            // Increment campaign failed counter (only on final failure) + check for completion
+            if (exhausted && msg.campaign_id) {
+              const { error: rpcErr } = await this.supabase.rpc('increment_campaign_failed', { p_campaign_id: msg.campaign_id });
+              if (rpcErr) this.logger.error({ err: rpcErr }, 'Failed to increment campaign failed counter');
+              // Check if campaign is now complete
+              const { count: remainingCount } = await this.supabase
+                .from('message_queue')
+                .select('id', { count: 'exact', head: true })
+                .eq('campaign_id', msg.campaign_id)
+                .in('status', ['pending', 'processing']);
+              if (remainingCount === 0) {
+                await this.supabase
+                  .from('campaigns')
+                  .update({ status: 'completed' })
+                  .eq('id', msg.campaign_id)
+                  .in('status', ['active', 'scheduled']);
+              }
+            }
+
+            // If error is 'Connection Closed', the socket is likely dead — break loop
+            if (sendErr.message?.includes('Connection Closed') || sendErr.message?.includes('Timed Out')) {
+              this.logger.warn(`Campaign runner: Socket appears dead for ${accountId}, breaking batch to allow reconnect`);
+              break;
+            }
+
+            // Small delay even on failure before next attempt
+            await new Promise((r) => setTimeout(r, 3000));
           }
         }
       } catch (err) {
@@ -511,17 +750,16 @@ export class ClientManager {
 
   /**
    * Start polling fallback — periodically checks Supabase for changes.
-   * This ensures reliability if Realtime subscriptions time out.
    */
   _startPolling() {
     if (!this.isRunning) return;
 
     this.pollTimer = setInterval(async () => {
       this.logger.debug('Polling database for account updates (fallback)...');
-      
-      // Update system config
+
+      // Refresh system config
       await this._loadSystemConfig();
-      
+
       try {
         const { data: accounts, error } = await this.supabase
           .from('wa_accounts')
@@ -554,11 +792,9 @@ export class ClientManager {
 
   /**
    * Sync a single account's database state with its local socket.
-   * @param {object} account - The wa_accounts row
-   * @param {object} socketEntry - The existing socket map entry (optional)
    */
   async syncAccount(account, socketEntry) {
-    // case A: New account added (not in our map)
+    // Case A: New account (not in our map)
     if (!socketEntry) {
       this.logger.info(`Sync: New account detected: ${account.display_name}`);
       this.retryCounts.set(account.id, 0);
@@ -566,17 +802,8 @@ export class ClientManager {
       return;
     }
 
-    // Case B: Re-pair triggered (status changed to pairing)
-    // socketEntry is an object with { sock, saveCreds }, we check DB 'status'
-    // Note: We only re-init if the DB status is 'pairing' BUT the local socket
-    // might still be 'active' or 'disconnected' from previously.
-    // However, the worker sets connection_status, not 'status'.
-    // We rely on the DB 'status' as the intent signal.
+    // Case B: Re-pair triggered (status changed to 'pairing')
     if (account.status === 'pairing' && account.connection_status === 'disconnected' && !account.pairing_qr) {
-      // This is a subtle check: if status is 'pairing' but we aren't currently
-      // showing a QR and aren't connected, it means we should probably re-init.
-      // But specifically handle the "Re-pair" click which sets status='pairing'
-      // and pairing_qr=null.
       this.logger.info(`Sync: Re-pair signal for ${account.display_name}`);
       await this.clearAuthFiles(account.id);
       this.retryCounts.set(account.id, 0);
@@ -617,25 +844,24 @@ export class ClientManager {
 
   /**
    * Load system configuration from DB.
+   * Keys are stored as JSONB values in system_config table.
    */
   async _loadSystemConfig() {
     try {
       const { data, error } = await this.supabase.from('system_config').select('*');
       if (error) throw error;
-      
+
       const config = {};
-      data.forEach(r => {
-        let val = r.value;
-        if (r.key.includes('limit') || r.key.includes('sec') || r.key.includes('jitter')) {
-            val = Number(val);
-        } else if (val === 'true') {
-            val = true;
-        } else if (val === 'false') {
-            val = false;
+      for (const row of data) {
+        // JSONB values: strings come wrapped in quotes, numbers are plain
+        let val = row.value;
+        // If it's a JSON-encoded string like '"Asia/Kolkata"', parse it
+        if (typeof val === 'string') {
+          try { val = JSON.parse(val); } catch { /* keep as string */ }
         }
-        config[r.key] = val;
-      });
-      
+        config[row.key] = val;
+      }
+
       this.systemConfig = config;
       this.logger.debug('System config loaded/refreshed.');
     } catch (err) {
@@ -644,14 +870,16 @@ export class ClientManager {
   }
 
   /**
-   * Parses Spintax formatted strings like "Hi {John|Mary}, {how are you|how do you do}?"
+   * Parses Spintax formatted strings: {opt1|opt2|opt3}
+   * Also resolves [Variable] placeholders with a generic fallback.
    */
   _parseSpintax(text) {
     if (!text) return '';
-    const spintaxRegex = /{([^{}]+)}/g;
-    return text.replace(spintaxRegex, (match, p1) => {
-      const options = p1.split('|');
+    // Resolve {option|option} groups
+    let result = text.replace(/{([^{}]+)}/g, (_match, group) => {
+      const options = group.split('|');
       return options[Math.floor(Math.random() * options.length)];
     });
+    return result;
   }
 }

@@ -11,11 +11,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 const statusColors: Record<string, string> = {
-  active: "bg-success/15 text-success border-success/30",
+  active:    "bg-success/15 text-success border-success/30",
   completed: "bg-primary/15 text-primary border-primary/30",
-  draft: "bg-muted text-muted-foreground border-border",
-  paused: "bg-warning/15 text-warning border-warning/30",
+  draft:     "bg-muted text-muted-foreground border-border",
+  paused:    "bg-warning/15 text-warning border-warning/30",
   scheduled: "bg-info/15 text-info border-info/30",
+  cancelled: "bg-destructive/15 text-destructive border-destructive/30",
 };
 
 export default function CampaignsPage() {
@@ -24,21 +25,48 @@ export default function CampaignsPage() {
   const [search, setSearch] = useState("");
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const fetch = async () => {
+  const fetchCampaigns = async () => {
+    try {
       const { data, error } = await supabase
         .from("campaigns")
         .select("*")
         .order("created_at", { ascending: false });
-      if (error) toast.error("Failed to load campaigns");
-      else setCampaigns(data || []);
+      if (error) {
+        toast.error("Failed to load campaigns: " + error.message);
+      } else {
+        setCampaigns(data || []);
+      }
+    } catch (err: any) {
+      toast.error("Error loading campaigns: " + err.message);
+    } finally {
       setLoading(false);
-    };
-    fetch();
+    }
+  };
+
+  useEffect(() => {
+    fetchCampaigns();
+
+    // Real-time: update counters live as worker processes messages
+    const channel = supabase
+      .channel("campaigns_list")
+      .on("postgres_changes", { event: "*", schema: "public", table: "campaigns" }, (payload) => {
+        if (payload.eventType === "INSERT") {
+          setCampaigns((prev) => [payload.new as any, ...prev]);
+        } else if (payload.eventType === "UPDATE") {
+          setCampaigns((prev) =>
+            prev.map((c) => (c.id === payload.new.id ? { ...c, ...payload.new } : c))
+          );
+        } else if (payload.eventType === "DELETE") {
+          setCampaigns((prev) => prev.filter((c) => c.id !== payload.old.id));
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const filtered = campaigns.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase())
+    (c.name || "").toLowerCase().includes(search.toLowerCase())
   );
 
   if (loading) {

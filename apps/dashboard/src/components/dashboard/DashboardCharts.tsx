@@ -70,17 +70,30 @@ export function DashboardCharts() {
       setWeeklyData(Object.values(days));
     }
 
-    // 2. Fetch Account Load (By messages_sent_today)
+    // 2. Fetch Account Load from send_logs (source of truth — avoids inflated messages_sent_today)
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
     const { data: accountsRes } = await supabase
       .from("wa_accounts")
-      .select("display_name, messages_sent_today")
+      .select("id, display_name")
       .eq("is_archived", false);
 
+    const { data: todayLogs } = await supabase
+      .from("send_logs")
+      .select("account_id")
+      .eq("status", "sent")
+      .gte("created_at", todayStart.toISOString());
+
     if (accountsRes) {
+      const countByAccount: Record<string, number> = {};
+      for (const log of todayLogs || []) {
+        countByAccount[log.account_id] = (countByAccount[log.account_id] || 0) + 1;
+      }
       const colors = ["hsl(210, 100%, 56%)", "hsl(152, 69%, 45%)", "hsl(38, 92%, 50%)", "hsl(280, 65%, 60%)"];
       const formatted = accountsRes.map((a, i) => ({
         name: a.display_name,
-        value: a.messages_sent_today,
+        value: countByAccount[a.id] || 0,
         color: colors[i % colors.length]
       }));
       setAccountLoad(formatted);
@@ -90,7 +103,7 @@ export function DashboardCharts() {
     const { data: campaignsRes } = await supabase
       .from("campaigns")
       .select("name, sent_count, total_recipients, failed_count")
-      .in("status", ["active", "paused"])
+      .in("status", ["active", "scheduled"])
       .order("created_at", { ascending: false })
       .limit(3);
 
