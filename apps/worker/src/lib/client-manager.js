@@ -59,6 +59,8 @@ export class ClientManager {
     this.sockets = new Map();
     /** @type {Map<string, number>} Maps account ID → retry count */
     this.retryCounts = new Map();
+    /** @type {Map<string, NodeJS.Timeout>} Maps account ID → pending reconnect timer (so re-pair can cancel it) */
+    this._reconnectTimers = new Map();
     /** @type {import('@supabase/supabase-js').RealtimeChannel | null} */
     this.channel = null;
     /** Monotonic counter — incremented each time we (re)subscribe; lets stale callbacks self-abort */
@@ -343,10 +345,15 @@ export class ClientManager {
               .update({ connection_status: 'reconnecting' })
               .eq('id', accountId);
 
-            setTimeout(async () => {
+            // Cancel any existing pending reconnect for this account before scheduling a new one
+            if (this._reconnectTimers.has(accountId)) {
+              clearTimeout(this._reconnectTimers.get(accountId));
+            }
+            const timer = setTimeout(async () => {
+              this._reconnectTimers.delete(accountId);
               if (!this.isRunning) return;
 
-              // Re-fetch account to check if it's been archived
+              // Re-fetch account to check if it's been archived or re-paired
               const { data: current } = await this.supabase
                 .from('wa_accounts')
                 .select('*')
@@ -358,6 +365,7 @@ export class ClientManager {
                 await this.initSocket(current);
               }
             }, delay);
+            this._reconnectTimers.set(accountId, timer);
           } else {
             // Give up — mark as disconnected
             const reason = isNonReconnectable
@@ -468,6 +476,12 @@ export class ClientManager {
    * @param {string} accountId
    */
   async terminateSocket(accountId) {
+    // Cancel any pending reconnect timer
+    if (this._reconnectTimers.has(accountId)) {
+      clearTimeout(this._reconnectTimers.get(accountId));
+      this._reconnectTimers.delete(accountId);
+    }
+
     const entry = this.sockets.get(accountId);
     if (!entry) return;
 
@@ -493,6 +507,11 @@ export class ClientManager {
    * @param {string} accountId
    */
   async clearAuthFiles(accountId) {
+    // Cancel any pending reconnect so it doesn't reinit with stale/deleted auth
+    if (this._reconnectTimers.has(accountId)) {
+      clearTimeout(this._reconnectTimers.get(accountId));
+      this._reconnectTimers.delete(accountId);
+    }
     const authDir = path.resolve(`./auth_info_${accountId}`);
     try {
       await fs.rm(authDir, { recursive: true, force: true });
