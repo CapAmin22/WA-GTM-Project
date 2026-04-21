@@ -168,9 +168,10 @@ export function KPICards() {
             </div>
           </div>
           <div className="text-xl font-semibold tracking-tight">{kpi.value}</div>
-          <div className="text-[11px] text-muted-foreground mt-0.5">
-            {kpi.title}
-          </div>
+          <div className="text-[11px] text-muted-foreground mt-0.5">{kpi.title}</div>
+          {kpi.subtitle && (
+            <div className="text-[10px] text-muted-foreground/60 mt-0.5">{kpi.subtitle}</div>
+          )}
         </div>
       ))}
     </div>

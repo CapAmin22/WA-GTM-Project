@@ -1,63 +1,63 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
+function formatTime(dateStr: string) {
+  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  return `${Math.floor(diff / 3600)}h ago`;
+}
+
 export function LiveActivityFeed() {
-  const [activities, setActivities] = useState<any[]>([]);
+  // Store raw ISO timestamps; compute display time reactively via ticker
+  const [rawLogs, setRawLogs] = useState<any[]>([]);
+  const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const fetchRecentLogs = async () => {
+  const fetchRecentLogs = useCallback(async () => {
     const { data, error } = await supabase
       .from("send_logs")
-      .select(`
-        id, 
-        status, 
-        error_message, 
-        created_at, 
-        message_queue (recipient_phone), 
+      .select(`id, status, error_message, created_at,
+        message_queue (recipient_phone),
         wa_accounts (display_name),
-        campaigns (name)
-      `)
+        campaigns (name)`)
       .order("created_at", { ascending: false })
       .limit(10);
 
     if (!error && data) {
-      const formatted = data.map((l: any) => ({
+      setRawLogs(data.map((l: any) => ({
         id: l.id,
         status: l.status,
         phone: l.message_queue?.recipient_phone || "Unknown",
         account: l.wa_accounts?.display_name || "System",
-        time: formatTime(l.created_at),
-        template: l.campaigns?.name || "Manual",
-        error: l.error_message
-      }));
-      setActivities(formatted);
+        createdAt: l.created_at,
+        campaign: l.campaigns?.name || null,
+        error: l.error_message,
+      })));
     }
     setLoading(false);
-  };
-
-  const formatTime = (dateStr: string) => {
-    const diff = Math.floor((new Date().getTime() - new Date(dateStr).getTime()) / 1000);
-    if (diff < 60) return `${diff}s ago`;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    return `${Math.floor(diff / 3600)}h ago`;
-  };
+  }, []);
 
   useEffect(() => {
     fetchRecentLogs();
 
-    // Subscribe to real-time send_logs
     const channel = supabase
       .channel("live_activity")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "send_logs" }, () => {
-        fetchRecentLogs();
-      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "send_logs" }, fetchRecentLogs)
       .subscribe();
+
+    // Tick every 30s so relative timestamps stay fresh
+    const ticker = setInterval(() => setTick((t) => t + 1), 30000);
 
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(ticker);
     };
-  }, []);
+  }, [fetchRecentLogs]);
+
+  // Derive display-ready activities on each tick
+  const activities = rawLogs.map((l) => ({ ...l, time: formatTime(l.createdAt) }));
 
   if (loading) {
     return (
@@ -96,8 +96,8 @@ export function LiveActivityFeed() {
                     : `Failed: ${a.phone} — ${a.error || 'Unknown Error'}`
                   }
                 </span>
-                {a.template && a.template !== "Manual" && (
-                  <span className="text-[10px] text-muted-foreground truncate block">{a.template}</span>
+                {a.campaign && (
+                  <span className="text-[10px] text-muted-foreground truncate block">{a.campaign}</span>
                 )}
               </div>
               <span className="text-[11px] text-muted-foreground flex-shrink-0">

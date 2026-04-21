@@ -11,7 +11,6 @@ import {
   PieChart,
   Pie,
   Cell,
-  Line,
 } from "recharts";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2 } from "lucide-react";
@@ -147,7 +146,7 @@ export function DashboardCharts() {
             <YAxis tick={{ fontSize: 11, fill: "hsl(215, 14%, 50%)" }} axisLine={false} tickLine={false} width={30} />
             <Tooltip content={<CustomTooltip />} />
             <Area type="monotone" dataKey="sent" name="Sent" stroke="hsl(210, 100%, 56%)" fill="url(#sentGrad)" strokeWidth={2} />
-            <Line type="monotone" dataKey="failed" name="Failed" stroke="hsl(0, 72%, 51%)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} />
+            <Area type="monotone" dataKey="failed" name="Failed" stroke="hsl(0, 72%, 51%)" fill="transparent" strokeWidth={1.5} strokeDasharray="4 4" />
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -203,12 +202,12 @@ export function DashboardCharts() {
                 <div className="flex h-2 rounded-full overflow-hidden bg-muted">
                   <div
                     className="bg-primary/80 transition-all"
-                    style={{ width: `${(c.sent / c.total) * 100}%` }}
+                    style={{ width: c.total > 0 ? `${Math.min((c.sent / c.total) * 100, 100)}%` : "0%" }}
                   />
-                  {c.failed > 0 && (
+                  {c.failed > 0 && c.total > 0 && (
                     <div
                       className="bg-destructive transition-all"
-                      style={{ width: `${(c.failed / c.total) * 100}%` }}
+                      style={{ width: `${Math.min((c.failed / c.total) * 100, 100)}%` }}
                     />
                   )}
                 </div>

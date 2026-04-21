@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, Search, Upload, Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import Papa from "papaparse";
@@ -42,6 +42,15 @@ export default function ContactsPage() {
   const [blPhone, setBlPhone] = useState("");
   const [blReason, setBlReason] = useState("");
   const [addingBl, setAddingBl] = useState(false);
+
+  // ── Confirm dialog ────────────────────────────────────────────
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmConfig, setConfirmConfig] = useState<{ title: string; description: string; onConfirm: () => void; danger?: boolean }>({ title: "", description: "", onConfirm: () => {} });
+
+  const openConfirm = (config: typeof confirmConfig) => {
+    setConfirmConfig(config);
+    setConfirmOpen(true);
+  };
 
   // ─────────────────────────────────────────────────────────────
 
@@ -319,11 +328,16 @@ export default function ContactsPage() {
   };
 
   // ── Delete Segment ────────────────────────────────────────────
-  const handleDeleteSegment = async (id: string, name: string) => {
-    if (!confirm(`Delete segment "${name}"? This won't affect contacts.`)) return;
-    const { error } = await supabase.from("contact_segments").delete().eq("id", id);
-    if (error) toast.error("Failed: " + error.message);
-    else { toast.success("Segment deleted."); fetchAll(); }
+  const handleDeleteSegment = (id: string, name: string) => {
+    openConfirm({
+      title: `Delete "${name}"?`,
+      description: "This segment will be removed. Contacts will not be affected.",
+      onConfirm: async () => {
+        const { error } = await supabase.from("contact_segments").delete().eq("id", id);
+        if (error) toast.error("Failed: " + error.message);
+        else { toast.success("Segment deleted."); fetchAll(); }
+      },
+    });
   };
 
   // ── Add to Blacklist ──────────────────────────────────────────
@@ -367,20 +381,32 @@ export default function ContactsPage() {
   };
 
   // ── Delete Contact ──────────────────────────────────────────────
-  const handleDeleteContact = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete ${name || "this contact"}?`)) return;
-    const { error } = await supabase.from("contacts").delete().eq("id", id);
-    if (error) { toast.error("Failed to delete contact: " + error.message); }
-    else { toast.success("Contact deleted."); fetchAll(); }
+  const handleDeleteContact = (id: string, name: string) => {
+    openConfirm({
+      title: `Delete ${name || "this contact"}?`,
+      description: "This contact will be permanently removed from your list.",
+      danger: true,
+      onConfirm: async () => {
+        const { error } = await supabase.from("contacts").delete().eq("id", id);
+        if (error) toast.error("Failed to delete contact: " + error.message);
+        else { toast.success("Contact deleted."); fetchAll(); }
+      },
+    });
   };
 
   // ── Delete All Contacts ───────────────────────────────────────
-  const handleDeleteAllContacts = async () => {
-    if (!confirm("Are you ABSOLUTELY sure you want to delete ALL contacts? This cannot be undone.")) return;
-    setLoading(true);
-    const { error } = await supabase.from("contacts").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-    if (error) { toast.error("Failed to delete all contacts: " + error.message); setLoading(false); }
-    else { toast.success("All contacts deleted."); fetchAll(); }
+  const handleDeleteAllContacts = () => {
+    openConfirm({
+      title: "Delete ALL contacts?",
+      description: "This will permanently delete every contact in your list. This action cannot be undone.",
+      danger: true,
+      onConfirm: async () => {
+        setLoading(true);
+        const { error } = await supabase.from("contacts").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+        if (error) { toast.error("Failed to delete all contacts: " + error.message); setLoading(false); }
+        else { toast.success("All contacts deleted."); fetchAll(); }
+      },
+    });
   };
 
   if (loading) {
@@ -639,6 +665,26 @@ export default function ContactsPage() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Confirm Dialog */}
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{confirmConfig.title}</DialogTitle>
+            <DialogDescription>{confirmConfig.description}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" size="sm" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button
+              size="sm"
+              variant={confirmConfig.danger ? "destructive" : "default"}
+              onClick={() => { setConfirmOpen(false); confirmConfig.onConfirm(); }}
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 }

@@ -27,6 +27,7 @@ export default function LogsPage() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterType>("all");
   const [page, setPage] = useState(0);
+  const [tick, setTick] = useState(0);
 
   const fetchLogs = async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
@@ -43,8 +44,6 @@ export default function LogsPage() {
       const formatted = data.map((l: any) => ({
         id: l.id,
         timestamp: l.created_at,
-        time: new Date(l.created_at).toLocaleString(),
-        relativeTime: getRelativeTime(l.created_at),
         phone: l.message_queue?.recipient_phone || "Unknown",
         recipientName: l.message_queue?.recipient_name || null,
         account: l.wa_accounts?.display_name || "System",
@@ -84,8 +83,11 @@ export default function LogsPage() {
       })
       .subscribe();
 
+    const ticker = setInterval(() => setTick((t) => t + 1), 60000);
+
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(ticker);
     };
   }, []);
 
@@ -116,7 +118,8 @@ export default function LogsPage() {
       );
     }
     return result;
-  }, [logs, filter, search]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logs, filter, search, tick]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -229,7 +232,7 @@ export default function LogsPage() {
                   >
                     {/* Time */}
                     <div className="flex flex-col">
-                      <span className="text-[10px] text-muted-foreground font-mono">{log.relativeTime}</span>
+                      <span className="text-[10px] text-muted-foreground font-mono">{getRelativeTime(log.timestamp)}</span>
                       <span className="text-[9px] text-muted-foreground/60">{new Date(log.timestamp).toLocaleTimeString()}</span>
                     </div>
 

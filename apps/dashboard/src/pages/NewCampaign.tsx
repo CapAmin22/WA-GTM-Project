@@ -587,7 +587,10 @@ export default function NewCampaignPage() {
 
               {abEnabled && (
                 <div className="space-y-3 pl-1">
-                  <Label className="text-xs font-medium">Select Experiment</Label>
+                  <div>
+                    <Label className="text-xs font-medium">Select Experiment</Label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Only <strong>draft</strong> experiments appear here. Once started, an experiment moves to "running" and can no longer be assigned to new campaigns.</p>
+                  </div>
                   {experiments.length === 0 ? (
                     <div className="text-sm text-muted-foreground p-5 rounded-md bg-muted/30 border border-border text-center">
                       <FlaskConical className="h-8 w-8 mx-auto mb-2 text-muted-foreground/50" />
