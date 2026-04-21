@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   Zap,
   LogOut,
+  Inbox,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -22,6 +23,7 @@ const navItems = [
   { to: "/campaigns", icon: Megaphone, label: "Campaigns" },
   { to: "/templates", icon: MessageSquareText, label: "Message Studio" },
   { to: "/experiments", icon: FlaskConical, label: "A/B Testing" },
+  { to: "/inbox", icon: Inbox, label: "Inbox" },
   { to: "/accounts", icon: Smartphone, label: "Accounts" },
   { to: "/contacts", icon: Users, label: "Contacts" },
   { to: "/analytics", icon: BarChart3, label: "Analytics" },

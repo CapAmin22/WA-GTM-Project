@@ -21,6 +21,7 @@ import ContactsPage from "./pages/Contacts";
 import AnalyticsPage from "./pages/Analytics";
 import SettingsPage from "./pages/Settings";
 import LogsPage from "./pages/Logs";
+import InboxPage from "./pages/Inbox";
 
 const queryClient = new QueryClient();
 
@@ -76,6 +77,7 @@ const App = () => (
             <Route path="/analytics" element={<PrivateRoute><AnalyticsPage /></PrivateRoute>} />
             <Route path="/settings" element={<PrivateRoute><SettingsPage /></PrivateRoute>} />
             <Route path="/logs" element={<PrivateRoute><LogsPage /></PrivateRoute>} />
+            <Route path="/inbox" element={<PrivateRoute><InboxPage /></PrivateRoute>} />
 
             <Route path="*" element={<NotFound />} />
           </Routes>

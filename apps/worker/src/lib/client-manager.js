@@ -386,42 +386,63 @@ export class ClientManager {
 
       // ---- Incoming Message Handler ----
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type === 'notify') {
-          for (const msg of messages) {
-            if (!msg.key.fromMe && msg.key.remoteJid) {
-              const senderPhone = msg.key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
-              this.logger.debug(`${tag} Received message from ${senderPhone}`);
+        if (type !== 'notify') return;
 
-              // Increment reply counter on the contact record
-              try {
-                await this.supabase
+        for (const msg of messages) {
+          if (!msg.key.remoteJid) continue;
+
+          // Skip broadcast / status updates
+          if (msg.key.remoteJid === 'status@broadcast') continue;
+
+          const contactPhone = msg.key.remoteJid
+            .replace('@s.whatsapp.net', '')
+            .replace('@g.us', '');
+
+          // Extract text body from any message type
+          const body = this._extractMessageBody(msg);
+          const msgType = msg.message ? Object.keys(msg.message)[0] || 'text' : 'text';
+          const ts = new Date((Number(msg.messageTimestamp) || Date.now() / 1000) * 1000).toISOString();
+
+          // Persist to wa_messages for the Inbox feature (non-fatal if table missing)
+          try {
+            await this.supabase.from('wa_messages').upsert({
+              account_id: accountId,
+              wa_message_id: msg.key.id,
+              remote_jid: msg.key.remoteJid,
+              contact_phone: contactPhone,
+              from_me: msg.key.fromMe || false,
+              body: body || null,
+              message_type: msgType,
+              status: msg.key.fromMe ? 'sent' : 'received',
+              timestamp: ts,
+            }, { onConflict: 'wa_message_id', ignoreDuplicates: true });
+          } catch {
+            // Table may not exist yet — non-fatal, run migration 006 to enable Inbox
+          }
+
+          // Only process inbound for reply tracking
+          if (!msg.key.fromMe) {
+            this.logger.debug(`${tag} Received message from ${contactPhone}`);
+
+            try {
+              const { error: rpcErr } = await this.supabase.rpc('increment_contact_reply', { p_phone: contactPhone });
+              if (rpcErr) {
+                this.supabase
                   .from('contacts')
-                  .update({
-                    total_replies: this.supabase.rpc ? undefined : 0, // handled below
-                  })
-                  .eq('phone', senderPhone);
-
-                // Use raw increment via RPC-style update
-                const { error: rpcErr } = await this.supabase.rpc('increment_contact_reply', { p_phone: senderPhone });
-                if (rpcErr) {
-                  // Fallback: direct update if RPC not available
-                  this.supabase
-                    .from('contacts')
-                    .select('total_replies')
-                    .eq('phone', senderPhone)
-                    .single()
-                    .then(({ data }) => {
-                      if (data) {
-                        this.supabase
-                          .from('contacts')
-                          .update({ total_replies: (data.total_replies || 0) + 1 })
-                          .eq('phone', senderPhone);
-                      }
-                    });
-                }
-              } catch {
-                // Non-fatal: reply tracking failure doesn't stop the worker
+                  .select('total_replies')
+                  .eq('phone', contactPhone)
+                  .single()
+                  .then(({ data }) => {
+                    if (data) {
+                      this.supabase
+                        .from('contacts')
+                        .update({ total_replies: (data.total_replies || 0) + 1 })
+                        .eq('phone', contactPhone);
+                    }
+                  });
               }
+            } catch {
+              // Non-fatal
             }
           }
         }
@@ -612,9 +633,26 @@ export class ClientManager {
             }
 
             // Send the message
-            await socketEntry.sock.sendMessage(jid, { text: finalBody });
+            const sentResult = await socketEntry.sock.sendMessage(jid, { text: finalBody });
 
             const latencyMs = Date.now() - sendStart;
+
+            // Persist outbound message to wa_messages for Inbox feature (non-fatal)
+            try {
+              await this.supabase.from('wa_messages').upsert({
+                account_id: accountId,
+                wa_message_id: sentResult?.key?.id || null,
+                remote_jid: jid,
+                contact_phone: jid.replace('@s.whatsapp.net', '').replace('@g.us', ''),
+                from_me: true,
+                body: finalBody,
+                message_type: 'text',
+                status: 'sent',
+                timestamp: new Date().toISOString(),
+              }, { onConflict: 'wa_message_id', ignoreDuplicates: true });
+            } catch {
+              // Table may not exist yet — non-fatal, run migration 006 to enable Inbox
+            }
 
             // Mark queue item as sent
             await this.supabase
@@ -875,11 +913,37 @@ export class ClientManager {
    */
   _parseSpintax(text) {
     if (!text) return '';
-    // Resolve {option|option} groups
     let result = text.replace(/{([^{}]+)}/g, (_match, group) => {
       const options = group.split('|');
       return options[Math.floor(Math.random() * options.length)];
     });
     return result;
+  }
+
+  /**
+   * Extracts a human-readable text body from any Baileys message object.
+   * Handles text, extended text, images/videos (caption), documents, audio, stickers.
+   */
+  _extractMessageBody(msg) {
+    const m = msg.message;
+    if (!m) return null;
+    return (
+      m.conversation ||
+      m.extendedTextMessage?.text ||
+      m.imageMessage?.caption ||
+      m.videoMessage?.caption ||
+      m.documentMessage?.caption ||
+      m.buttonsResponseMessage?.selectedDisplayText ||
+      m.listResponseMessage?.title ||
+      m.templateButtonReplyMessage?.selectedDisplayText ||
+      (m.imageMessage   ? '[Image]'                                              : null) ||
+      (m.videoMessage   ? '[Video]'                                              : null) ||
+      (m.audioMessage   ? '[Voice message]'                                      : null) ||
+      (m.documentMessage ? `[Document: ${m.documentMessage.fileName || 'file'}]` : null) ||
+      (m.stickerMessage ? '[Sticker]'                                            : null) ||
+      (m.locationMessage ? '[Location]'                                          : null) ||
+      (m.contactMessage  ? `[Contact: ${m.contactMessage.displayName}]`          : null) ||
+      null
+    );
   }
 }
